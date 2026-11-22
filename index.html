@@ -3255,7 +3255,9 @@
         } catch (err) {
           btn.disabled = false;
           btn.textContent = 'Send OTP';
-          showToast('SMS OTP requires browser/Play Services verification. Use Password login if blocked.', 'error');
+          try { if (window.smcRecaptcha) { window.smcRecaptcha.clear(); window.smcRecaptcha = null; } } catch (e2) {}
+          const code = (err && (err.code || err.message)) || 'OTP blocked';
+          showToast('SMS OTP Error: ' + code, 'error');
         }
       });
 
@@ -4202,8 +4204,20 @@
       }
 
       async function tryBiometricUnlock() {
+        try {
+          const capBio = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.BiometricAuth;
+          if (capBio && typeof capBio.authenticate === 'function') {
+            await capBio.authenticate({ reason: 'Unlock SMC App with Fingerprint', cancelTitle: 'Use PIN', allowDeviceCredential: true });
+            document.getElementById('applock-overlay').classList.add('hidden');
+            showToast('Unlocked with Fingerprint!');
+            return;
+          }
+        } catch (err) {
+          showToast('Fingerprint cancelled. Enter 4-digit PIN.', 'warn');
+          return;
+        }
         if (!window.PublicKeyCredential) {
-          showToast('Use your 4-digit PIN (Fingerprint not supported in this WebView).', 'warn');
+          showToast('Use your 4-digit PIN (Build Native APK for Fingerprint).', 'warn');
           return;
         }
         try {
