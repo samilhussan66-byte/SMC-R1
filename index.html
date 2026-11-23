@@ -3394,8 +3394,9 @@
         try {
           try { if (window.smcRecaptcha) { window.smcRecaptcha.clear(); window.smcRecaptcha = null; } } catch (e2) {}
           const rcEl = document.getElementById('recaptcha-container');
-          if (rcEl) rcEl.innerHTML = '';
-          window.smcRecaptcha = new firebase.auth.RecaptchaVerifier('recaptcha-container', { size: 'invisible' });
+          const rcId = 'rc-' + Date.now();
+          if (rcEl) { rcEl.innerHTML = '<div id="' + rcId + '"></div>'; }
+          window.smcRecaptcha = new firebase.auth.RecaptchaVerifier(rcEl ? rcId : 'recaptcha-container', { size: 'invisible' });
           otpConfirmResult = await fbAuth.signInWithPhoneNumber('+91' + targetPhone, window.smcRecaptcha);
           document.getElementById('otp-code-wrap').classList.remove('hidden');
           btn.disabled = false;
