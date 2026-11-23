@@ -1601,6 +1601,17 @@
         </div>
       </div>
 
+      <div class="glass-card rounded-2xl p-4 sm:p-5 space-y-2.5">
+        <h3 class="text-sm font-bold text-slate-900">📧 Free 6-Digit Email OTP Settings (EmailJS • Synced to All Apps)</h3>
+        <p class="text-[11px] text-slate-500">Enter your free EmailJS IDs once so Runners &amp; DBMs receive a 6-digit OTP on Email.</p>
+        <div class="grid grid-cols-1 sm:grid-cols-4 gap-2">
+          <input id="admin-ejs-service" type="text" placeholder="Service ID (service_xxx)" class="text-xs bg-slate-50 border border-slate-200 rounded-xl px-3 py-2" />
+          <input id="admin-ejs-template" type="text" placeholder="Template ID (template_xxx)" class="text-xs bg-slate-50 border border-slate-200 rounded-xl px-3 py-2" />
+          <input id="admin-ejs-key" type="text" placeholder="Public Key" class="text-xs bg-slate-50 border border-slate-200 rounded-xl px-3 py-2" />
+          <button id="save-ejs-btn" type="button" class="py-2 px-3 rounded-xl bank-blue text-white text-xs font-bold">Save Email OTP Keys</button>
+        </div>
+      </div>
+
       <div id="admin-sec-log" class="glass-card rounded-2xl p-4 sm:p-5">
         <div class="flex items-center justify-between mb-2">
           <p class="text-[11px] font-bold uppercase tracking-wide text-slate-400">Live Master Activity Log</p>
@@ -1692,6 +1703,9 @@
         inspectedTaskId: null,
         ownerTab: 'approvals',
         ownerFilter: 'All',
+        emailJsServiceId: 'service_8rvebjs',
+        emailJsTemplateId: 'template_eodeh6u',
+        emailJsPublicKey: 'PMT3Fvb1kyzNpjRO7',
         loginRole: 'runner',
         sessionRole: null,
         activeManagerId: 'ZK-DBM-02',
@@ -2258,6 +2272,12 @@
         const aseEl = document.getElementById('admin-support-email');
         if (aspEl && document.activeElement !== aspEl) aspEl.value = state.supportPhone || '1800-120-0000';
         if (aseEl && document.activeElement !== aseEl) aseEl.value = state.supportEmail || 'support@smc.com';
+        const ejsSrv = document.getElementById('admin-ejs-service');
+        const ejsTpl = document.getElementById('admin-ejs-template');
+        const ejsKey = document.getElementById('admin-ejs-key');
+        if (ejsSrv && document.activeElement !== ejsSrv) ejsSrv.value = state.emailJsServiceId || '';
+        if (ejsTpl && document.activeElement !== ejsTpl) ejsTpl.value = state.emailJsTemplateId || '';
+        if (ejsKey && document.activeElement !== ejsKey) ejsKey.value = state.emailJsPublicKey || '';
         document.getElementById('db-install-summary').textContent = `${installedCnt} / ${state.runners.length}`;
 
         const allUsers = [
@@ -2557,7 +2577,10 @@
           activityLogs: state.activityLogs,
           notifications: state.notifications,
           supportPhone: state.supportPhone || '1800-120-0000',
-          supportEmail: state.supportEmail || 'support@smc.com'
+          supportEmail: state.supportEmail || 'support@smc.com',
+          emailJsServiceId: state.emailJsServiceId || 'service_8rvebjs',
+          emailJsTemplateId: state.emailJsTemplateId || 'template_eodeh6u',
+          emailJsPublicKey: state.emailJsPublicKey || 'PMT3Fvb1kyzNpjRO7'
         };
       }
 
@@ -2627,7 +2650,10 @@
             activityLogs: Array.isArray(data.activityLogs) ? data.activityLogs : [],
             notifications: Array.isArray(data.notifications) ? data.notifications : [],
             supportPhone: data.supportPhone || state.supportPhone || '1800-120-0000',
-            supportEmail: data.supportEmail || state.supportEmail || 'support@smc.com'
+            supportEmail: data.supportEmail || state.supportEmail || 'support@smc.com',
+            emailJsServiceId: data.emailJsServiceId || state.emailJsServiceId || 'service_8rvebjs',
+            emailJsTemplateId: data.emailJsTemplateId || state.emailJsTemplateId || 'template_eodeh6u',
+            emailJsPublicKey: data.emailJsPublicKey || state.emailJsPublicKey || 'PMT3Fvb1kyzNpjRO7'
           };
           // Protect very recent local duty toggles from stale remote overwrite
           const nowMs = Date.now();
@@ -2651,6 +2677,9 @@
             state.notifications = remotePayload.notifications;
             state.supportPhone = remotePayload.supportPhone;
             state.supportEmail = remotePayload.supportEmail;
+            state.emailJsServiceId = remotePayload.emailJsServiceId;
+            state.emailJsTemplateId = remotePayload.emailJsTemplateId;
+            state.emailJsPublicKey = remotePayload.emailJsPublicKey;
             try { localStorage.setItem('zentrik_data_v1', remoteStr); } catch (e) {}
             if (!enforceRemoteLogoutIfNeeded() && !isInitial) {
               updateGlobalBadges();
@@ -3361,6 +3390,43 @@
             showToast('No Email ID saved by Admin for this account.', 'error');
             return;
           }
+          if (state.emailJsServiceId && state.emailJsTemplateId && state.emailJsPublicKey) {
+            const code6 = String(Math.floor(100000 + Math.random() * 900000));
+            window.smcEmailOtpSession = { code: code6, email: targetEmail.toLowerCase(), expiresAt: Date.now() + 5 * 60 * 1000 };
+            try {
+              const res = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  service_id: state.emailJsServiceId,
+                  template_id: state.emailJsTemplateId,
+                  user_id: state.emailJsPublicKey,
+                  template_params: {
+                    to_email: targetEmail,
+                    user_email: targetEmail,
+                    email: targetEmail,
+                    to_name: otpMatchedUser.obj.name || 'Runner',
+                    user_name: otpMatchedUser.obj.name || 'Runner',
+                    otp_code: code6,
+                    otp: code6,
+                    passcode: code6,
+                    app_name: 'SMC'
+                  }
+                })
+              });
+              if (!res.ok) throw new Error('EmailJS ' + res.status);
+              const otpInp = document.getElementById('otp-code-input');
+              if (otpInp) { otpInp.value = ''; otpInp.placeholder = 'Enter 6-Digit Email OTP'; }
+              document.getElementById('otp-code-wrap').classList.remove('hidden');
+              btn.disabled = false; btn.textContent = 'Resend OTP';
+              showToast(`6-Digit OTP sent to ${targetEmail}! Check your inbox.`);
+            } catch (err) {
+              window.smcEmailOtpSession = null;
+              btn.disabled = false; btn.textContent = 'Send OTP';
+              showToast('EmailJS Error: Check Service/Template/Public Key in SMC A1.', 'error');
+            }
+            return;
+          }
           try {
             const redirectUrl = window.location.origin + window.location.pathname;
             try {
@@ -3372,12 +3438,12 @@
             } catch (e) {}
             await fbAuth.sendSignInLinkToEmail(targetEmail, { url: redirectUrl, handleCodeInApp: true });
             btn.disabled = false; btn.textContent = 'Resend Link';
-            showToast(`Login link sent to ${targetEmail}! Open the link in your inbox (check Spam too).`);
+            showToast(`Login link sent to ${targetEmail}! Open the link in your inbox.`);
           } catch (err) {
             btn.disabled = false; btn.textContent = 'Send OTP';
             const ec = (err && err.code) || '';
-            if (ec === 'auth/operation-not-allowed') {
-              showToast('Enable "Email link (passwordless sign-in)" in Firebase Console -> Auth -> Email/Password.', 'error');
+            if (ec === 'auth/unauthorized-continue-uri') {
+              showToast('Add your EmailJS keys in SMC A1 for 6-digit Email OTP (or add domain in Firebase).', 'error');
             } else {
               showToast('Email Sign-In Error: ' + (ec || (err && err.message) || 'Failed'), 'error');
             }
@@ -3419,15 +3485,26 @@
 
       document.getElementById('verify-otp-btn').addEventListener('click', async () => {
         const code = document.getElementById('otp-code-input').value.trim();
-        if (!otpConfirmResult || !otpMatchedUser || code.length < 6) {
-          showToast('Enter the 6-digit SMS OTP sent to your phone.', 'error');
+        const isEmailOtp = Boolean(window.smcEmailOtpSession);
+        if ((!isEmailOtp && !otpConfirmResult) || !otpMatchedUser || code.length < 6) {
+          showToast('Enter the 6-digit OTP sent to your Email or Phone.', 'error');
           return;
         }
         const btn = document.getElementById('verify-otp-btn');
         btn.disabled = true;
         btn.textContent = 'Verifying...';
         try {
-          await otpConfirmResult.confirm(code);
+          if (isEmailOtp) {
+            const sess = window.smcEmailOtpSession;
+            if (Date.now() > sess.expiresAt) {
+              window.smcEmailOtpSession = null;
+              throw new Error('OTP Expired');
+            }
+            if (code !== sess.code) throw new Error('Wrong OTP');
+            window.smcEmailOtpSession = null;
+          } else {
+            await otpConfirmResult.confirm(code);
+          }
           btn.disabled = false;
           btn.textContent = 'Verify OTP & Login →';
           if (otpMatchedUser.role === 'runner') {
@@ -4827,6 +4904,24 @@
           showToast('24×7 Support details updated for all apps!');
         });
       }
+      const saveEjsBtn = document.getElementById('save-ejs-btn');
+      if (saveEjsBtn) {
+        saveEjsBtn.addEventListener('click', () => {
+          state.emailJsServiceId = (document.getElementById('admin-ejs-service').value || '').trim();
+          state.emailJsTemplateId = (document.getElementById('admin-ejs-template').value || '').trim();
+          state.emailJsPublicKey = (document.getElementById('admin-ejs-key').value || '').trim();
+          saveSession(true);
+          saveEjsBtn.textContent = '✓ Saved & Synced!';
+          saveEjsBtn.classList.remove('bank-blue');
+          saveEjsBtn.classList.add('bg-emerald-600');
+          showToast('6-Digit Email OTP settings saved & synced to all apps!');
+          setTimeout(() => {
+            saveEjsBtn.textContent = 'Save Email OTP Keys';
+            saveEjsBtn.classList.remove('bg-emerald-600');
+            saveEjsBtn.classList.add('bank-blue');
+          }, 1800);
+        });
+      }
       document.getElementById('idc-save-btn').addEventListener('click', () => {
         const { obj } = getActiveEmployeeRecord();
         if (!obj) return;
@@ -5141,6 +5236,9 @@
             if (Array.isArray(preData.notifications)) state.notifications = preData.notifications;
             if (preData.supportPhone) state.supportPhone = preData.supportPhone;
             if (preData.supportEmail) state.supportEmail = preData.supportEmail;
+            if (preData.emailJsServiceId) state.emailJsServiceId = preData.emailJsServiceId;
+            if (preData.emailJsTemplateId) state.emailJsTemplateId = preData.emailJsTemplateId;
+            if (preData.emailJsPublicKey) state.emailJsPublicKey = preData.emailJsPublicKey;
           }
           const preSess = JSON.parse(localStorage.getItem('zentrik_session') || 'null');
           if (preSess && preSess.sessionRole && (APP_MODE === 'all' || preSess.sessionRole === APP_MODE)) {
@@ -5238,6 +5336,9 @@
             if (Array.isArray(savedData.notifications)) state.notifications = savedData.notifications;
             if (savedData.supportPhone) state.supportPhone = savedData.supportPhone;
             if (savedData.supportEmail) state.supportEmail = savedData.supportEmail;
+            if (savedData.emailJsServiceId) state.emailJsServiceId = savedData.emailJsServiceId;
+            if (savedData.emailJsTemplateId) state.emailJsTemplateId = savedData.emailJsTemplateId;
+            if (savedData.emailJsPublicKey) state.emailJsPublicKey = savedData.emailJsPublicKey;
           }
           const saved = JSON.parse(localStorage.getItem('zentrik_session') || 'null');
           if (saved && saved.sessionRole && (APP_MODE === 'all' || saved.sessionRole === APP_MODE)) {
