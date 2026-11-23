@@ -3326,7 +3326,7 @@
 
       document.getElementById('send-otp-btn').addEventListener('click', async () => {
         const otpChk = document.getElementById('otp-terms-check');
-        if ((otpChk && !otpChk.checked) || !document.getElementById('login-terms-check').checked) {
+        if (otpChk && !otpChk.checked) {
           showToast('Please accept Terms & Conditions first.', 'error');
           return;
         }
@@ -3362,12 +3362,25 @@
             return;
           }
           try {
-            await fbAuth.sendSignInLinkToEmail(targetEmail, { url: window.location.href, handleCodeInApp: true });
-            btn.disabled = false; btn.textContent = 'Resend OTP';
-            showToast(`Verification link sent to ${targetEmail}. Check your inbox.`);
+            const redirectUrl = window.location.origin + window.location.pathname;
+            try {
+              localStorage.setItem('smc_email_signin_pending', JSON.stringify({
+                email: targetEmail,
+                role: otpMatchedUser.role,
+                id: otpMatchedUser.role === 'runner' ? otpMatchedUser.obj.id : otpMatchedUser.obj.empId
+              }));
+            } catch (e) {}
+            await fbAuth.sendSignInLinkToEmail(targetEmail, { url: redirectUrl, handleCodeInApp: true });
+            btn.disabled = false; btn.textContent = 'Resend Link';
+            showToast(`Login link sent to ${targetEmail}! Open the link in your inbox (check Spam too).`);
           } catch (err) {
             btn.disabled = false; btn.textContent = 'Send OTP';
-            showToast('Email OTP failed. Try Mobile SMS OTP or Password login.', 'error');
+            const ec = (err && err.code) || '';
+            if (ec === 'auth/operation-not-allowed') {
+              showToast('Enable "Email link (passwordless sign-in)" in Firebase Console -> Auth -> Email/Password.', 'error');
+            } else {
+              showToast('Email Sign-In Error: ' + (ec || (err && err.message) || 'Failed'), 'error');
+            }
           }
           return;
         }
@@ -3379,9 +3392,10 @@
           return;
         }
         try {
-          if (!window.smcRecaptcha) {
-            window.smcRecaptcha = new firebase.auth.RecaptchaVerifier('recaptcha-container', { size: 'invisible' });
-          }
+          try { if (window.smcRecaptcha) { window.smcRecaptcha.clear(); window.smcRecaptcha = null; } } catch (e2) {}
+          const rcEl = document.getElementById('recaptcha-container');
+          if (rcEl) rcEl.innerHTML = '';
+          window.smcRecaptcha = new firebase.auth.RecaptchaVerifier('recaptcha-container', { size: 'invisible' });
           otpConfirmResult = await fbAuth.signInWithPhoneNumber('+91' + targetPhone, window.smcRecaptcha);
           document.getElementById('otp-code-wrap').classList.remove('hidden');
           btn.disabled = false;
@@ -3392,7 +3406,13 @@
           btn.textContent = 'Send OTP';
           try { if (window.smcRecaptcha) { window.smcRecaptcha.clear(); window.smcRecaptcha = null; } } catch (e2) {}
           const code = (err && (err.code || err.message)) || 'OTP blocked';
-          showToast('SMS OTP Error: ' + code, 'error');
+          if (code.includes('too-many-requests')) {
+            showToast('Too many SMS attempts on this number. Wait a few hours or use Password login.', 'error');
+          } else if (code.includes('unauthorized-domain')) {
+            showToast(`Add ${window.location.hostname} to Firebase Authorized Domains.`, 'error');
+          } else {
+            showToast('SMS OTP Error: ' + code, 'error');
+          }
         }
       });
 
@@ -4371,6 +4391,41 @@
         }
       }
 
+      function bufToB64(buf) {
+        const bytes = new Uint8Array(buf);
+        let bin = '';
+        for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+        return btoa(bin);
+      }
+      function b64ToBuf(b64) {
+        const bin = atob(b64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        return bytes.buffer;
+      }
+      async function registerWebAuthnBiometric() {
+        if (!window.isSecureContext || !window.PublicKeyCredential) return false;
+        const challenge = new Uint8Array(32);
+        window.crypto.getRandomValues(challenge);
+        const userIdBytes = new Uint8Array(16);
+        window.crypto.getRandomValues(userIdBytes);
+        const uid = state.activeRunnerId || state.activeManagerId || 'smc-user';
+        const cred = await navigator.credentials.create({
+          publicKey: {
+            challenge,
+            rp: { name: 'SMC App', id: window.location.hostname },
+            user: { id: userIdBytes, name: uid, displayName: 'SMC User (' + uid + ')' },
+            pubKeyCredParams: [{ alg: -7, type: 'public-key' }, { alg: -257, type: 'public-key' }],
+            authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required' },
+            timeout: 60000
+          }
+        });
+        if (cred && cred.rawId) {
+          localStorage.setItem('smc_webauthn_cred_id', bufToB64(cred.rawId));
+          return true;
+        }
+        return false;
+      }
       async function tryBiometricUnlock() {
         try {
           const plugins = (window.Capacitor && window.Capacitor.Plugins) || {};
@@ -4392,19 +4447,40 @@
           showToast('Fingerprint cancelled. Enter 4-digit PIN.', 'warn');
           return;
         }
-        if (!window.PublicKeyCredential) {
-          showToast('Use your 4-digit PIN (Build Native APK for Fingerprint).', 'warn');
+        if (!window.isSecureContext || !window.PublicKeyCredential) {
+          showToast('Fingerprint works on HTTPS website or Native APK. Enter 4-digit PIN.', 'warn');
           return;
         }
         try {
-          const challenge = new Uint8Array(16);
+          let credId = localStorage.getItem('smc_webauthn_cred_id') || '';
+          if (!credId) {
+            const ok = await registerWebAuthnBiometric();
+            if (ok) {
+              try { sessionStorage.setItem('smc_pin_unlocked', '1'); } catch (e) {}
+              document.getElementById('applock-overlay').classList.add('hidden');
+              showToast('Fingerprint registered & unlocked!');
+            }
+            return;
+          }
+          const challenge = new Uint8Array(32);
           window.crypto.getRandomValues(challenge);
-          await navigator.credentials.get({ publicKey: { challenge, userVerification: 'required', timeout: 30000 } });
+          await navigator.credentials.get({
+            publicKey: {
+              challenge,
+              rpId: window.location.hostname,
+              allowCredentials: [{ id: b64ToBuf(credId), type: 'public-key' }],
+              userVerification: 'required',
+              timeout: 45000
+            }
+          });
           try { sessionStorage.setItem('smc_pin_unlocked', '1'); } catch (e) {}
           document.getElementById('applock-overlay').classList.add('hidden');
           showToast('Unlocked with Fingerprint!');
         } catch (e) {
-          showToast('Fingerprint cancelled or unavailable. Enter 4-digit PIN.', 'warn');
+          if (e && (e.name === 'InvalidStateError' || e.name === 'NotFoundError')) {
+            localStorage.removeItem('smc_webauthn_cred_id');
+          }
+          showToast('Fingerprint cancelled or not set up. Enter 4-digit PIN.', 'warn');
         }
       }
 
@@ -4468,13 +4544,26 @@
         openAppLockSetup();
       });
       document.getElementById('close-applock-setup').addEventListener('click', () => document.getElementById('applock-setup-modal').classList.add('hidden'));
-      document.getElementById('applock-save-btn').addEventListener('click', () => {
+      document.getElementById('applock-save-btn').addEventListener('click', async () => {
         const pin = document.getElementById('applock-new-pin').value.trim();
         if (!/^\d{4}$/.test(pin)) { showToast('Enter a valid 4-digit number PIN.', 'error'); return; }
+        const bioChecked = document.getElementById('applock-bio-toggle').checked;
         localStorage.setItem('zentrik_app_pin', pin);
-        localStorage.setItem('zentrik_bio_enabled', document.getElementById('applock-bio-toggle').checked ? '1' : '0');
+        localStorage.setItem('zentrik_bio_enabled', bioChecked ? '1' : '0');
         updateAppLockBadge();
         document.getElementById('applock-setup-modal').classList.add('hidden');
+        if (bioChecked && window.isSecureContext && window.PublicKeyCredential && !localStorage.getItem('smc_webauthn_cred_id')) {
+          const plugins = (window.Capacitor && window.Capacitor.Plugins) || {};
+          if (!plugins.BiometricAuthNative && !plugins.BiometricAuth) {
+            try {
+              const ok = await registerWebAuthnBiometric();
+              if (ok) { showToast('App Lock PIN & Fingerprint saved!'); return; }
+            } catch (e) {
+              showToast('PIN saved! Tap Fingerprint button on lock screen to enroll.', 'warn');
+              return;
+            }
+          }
+        }
         showToast('App Lock PIN saved!');
       });
       document.getElementById('applock-disable-btn').addEventListener('click', () => {
@@ -5090,6 +5179,39 @@
 
         // 3. Fast background Firebase pull & 1.2s real-time sync
         await cloudPull(true);
+        try {
+          if (fbAuth && fbAuth.isSignInWithEmailLink(window.location.href)) {
+            const pending = JSON.parse(localStorage.getItem('smc_email_signin_pending') || 'null');
+            let emailForLink = (pending && pending.email) || '';
+            if (emailForLink) {
+              await fbAuth.signInWithEmailLink(emailForLink.trim(), window.location.href);
+              localStorage.removeItem('smc_email_signin_pending');
+              const emLower = emailForLink.trim().toLowerCase();
+              const rMatch = state.runners.find((r) => (r.email || '').toLowerCase() === emLower && !r.blocked);
+              const mMatch = state.managers.find((m) => (m.email || '').toLowerCase() === emLower && !m.blocked);
+              if (rMatch && (APP_MODE === 'all' || APP_MODE === 'runner')) {
+                rMatch.installed = true; rMatch.termsAccepted = true; rMatch.loggedIn = true; rMatch.forceLoggedOut = false;
+                rMatch.lastLoginAt = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                state.activeRunnerId = rMatch.id;
+                state.sessionRole = 'runner';
+                saveSession(true);
+                switchView('runner');
+                showToast(`Welcome, ${rMatch.name}!`);
+              } else if (mMatch && (APP_MODE === 'all' || APP_MODE === 'owner')) {
+                mMatch.installed = true; mMatch.loggedIn = true; mMatch.forceLoggedOut = false;
+                mMatch.lastLoginAt = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                state.activeManagerId = mMatch.empId;
+                state.sessionRole = 'owner';
+                saveSession(true);
+                switchView('owner');
+                showToast(`Signed in as ${mMatch.name}`);
+              }
+              try { history.replaceState(null, '', window.location.pathname); } catch (e) {}
+            }
+          }
+        } catch (err) {
+          showToast('Email link expired or invalid. Please request a new link.', 'error');
+        }
         setInterval(() => { cloudPull(false); }, 1200);
         document.addEventListener('visibilitychange', () => { if (!document.hidden) cloudPull(false); });
         const sel = document.getElementById('runner-select');
